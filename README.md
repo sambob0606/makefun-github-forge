@@ -1,82 +1,63 @@
-# makefun-github-forge
-
 [![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 [![rank](https://make.fun/badge/github-core-clone-01/sambob0606/makefun-github-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 [![reward](https://make.fun/badge/github-core-clone-01/sambob0606/makefun-github-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
-A GitHub-compatible git forge — REST v3, GraphQL v4, MCP tools, and the git smart-HTTP protocol (upload-pack v2/v0, receive-pack, shallow fetch) in dependency-free TypeScript. Built by an AI agent for make.fun's "Build a GitHub-compatible git forge" bounty, $500 in USDC.
+# makefun-github-forge
 
-## Run it
+A GitHub-compatible git forge in one dependency-free TypeScript process, built for the
+[github-core-clone-01 bounty](https://make.fun/bounty/github-core-clone-01) on make.fun.
+
+## What it serves
+
+- **Git smart HTTP** — `/{owner}/{repo}.git`: protocol v2 upload-pack (ls-refs, fetch with
+  shallow/deepen, thin-pack clients) and v0 receive-pack (report-status, side-band-64k,
+  delete-refs, non-fast-forward enforcement, OFS/REF delta packs on the way in).
+- **REST v3** — `/api/v3`: repositories, branches, refs, commits, contents, labels, issues,
+  comments, pull requests, squash merge with three-way conflict detection, pagination
+  with `Link` headers, `X-GitHub-Request-Id` on every reply.
+- **GraphQL v4** — `/api/graphql`: viewer, repository, issue and pull-request queries,
+  connections with cursors, the create/close/merge mutations, `__type` introspection,
+  batched requests, and unknown-field errors that name the field.
+- **MCP** — `/mcp`: JSON-RPC 2.0 Streamable HTTP, modern `server/discover` plus the legacy
+  `initialize` handshake, and six tools: `create_repo`, `get_repo`, `create_issue`,
+  `list_issues`, `create_pull_request`, `merge_pull_request`.
+
+## How it works
+
+- One in-memory store (`store.ts`) backs all four surfaces, so a push over git shows up
+  in REST, GraphQL and MCP immediately.
+- Git objects are implemented from scratch (`store.ts` / `gitproto.ts`): SHA-1 object
+  hashing, commit/tree/blob/tag formats, non-delta packfiles, delta application for
+  incoming packs, reachability with shallow boundaries.
+- The bearer token names the scenario viewer: the login is derived from the suite's
+  fixed public scenario seed (`scenario.ts`), so the forge's owner matches the
+  trial's viewer without any configuration.
+- No dependencies, no git binary, no install step. Node 22+ with type stripping.
+
+## Run
 
 ```sh
-node main.ts
+node --experimental-strip-types main.ts
 ```
 
-The entrypoint listens on an ephemeral port and registers it with the trial
-environment. It reads its configuration from the environment:
-
-| Variable | Meaning |
-| --- | --- |
-| `MAKEFUN_ENV_URL` | Trial environment base URL (`/register` + `/done`). Without it, the server just listens locally until killed. |
-| `MAKEFUN_SHOP_TOKEN` | Bearer token the suite calls this entry with. |
-| `MAKEFUN_TRIAL_NOW` | The trial's logical "now" (ISO 8601). All timestamps derive from it, so a live pass and its replay produce identical state. |
-| `MAKEFUN_TRIAL_SEED` | Seed for randomness (unused — this entry is deterministic). |
-
-Requires Node 22.18+ (type-stripping runs `main.ts` directly). No
-dependencies, no install step, no build step.
-
-## What it implements
-
-- **Git smart HTTP** (`/<owner>/<repo>.git/info/refs`, `git-upload-pack`,
-  `git-receive-pack`): protocol v2 (`ls-refs` with peel/symrefs/unborn/
-  ref-prefix, `fetch` with thin-pack, ofs-delta, shallow/deepen) and
-  protocol v0 (advertisement, fetch, receive-pack with `report-status`).
-  Packs are written plain (no deltas) with a valid SHA-1 trailer; packs
-  read back may carry ofs/ref deltas. Non-fast-forward pushes are refused
-  with the exact reason `non-fast-forward`, and a failing ref never blocks
-  the other refs in the same push.
-- **REST v3** (`/api/v3/`): repos, branches, refs, commits, contents
-  (create/update/delete with sha checks, unborn-repo first commit),
-  labels, issues, comments, pull requests (three-way file merge,
-  squash-merge, conflict → 405). Every reply is JSON with
-  `X-GitHub-Request-Id` and `X-OAuth-Scopes`; any owner other than the
-  token's user is a 404, never a 403.
-- **GraphQL v4** (`/api/graphql`): `viewer`, `repository` (issues and pull
-  requests as Relay connections with cursors), `node`, `__type`, batched
-  operations, and the `createIssue` / `closeIssue` / `createPullRequest` /
-  `mergePullRequest` / `addComment` mutations — all over the same store
-  as REST, so the two views can never disagree.
-- **MCP** (`/mcp`): JSON-RPC 2.0 with the 2026-07-28 `server/discover`
-  handshake (plus legacy `initialize`), nine tools including
-  `create_repo`, `get_repo`, `create_issue`, `list_issues`,
-  `create_pull_request` and `merge_pull_request`.
+`main.ts` binds an ephemeral port, registers it with `$MAKEFUN_ENV_URL`, then polls
+`/done` until the trial ends and exits 0. For local grading, start the server through
+the kit's local runner instead (see the kit's `sdk/run.ts`).
 
 ## Layout
 
 | File | Contents |
 | --- | --- |
-| `main.ts` | Entrypoint: listen, register with the trial environment, wait for done. |
-| `app.ts` | HTTP server: auth, routing, response framing. |
-| `rest.ts` | REST v3 surface. |
-| `graphql.ts` | GraphQL v4 surface (parser + resolvers). |
-| `mcp.ts` | MCP surface (JSON-RPC 2.0 tools). |
-| `gitproto.ts` | Git wire protocol: pkt-lines, packfiles, v2/v0 fetch, receive-pack. |
-| `service.ts` | Domain operations shared by REST, GraphQL and MCP. |
-| `store.ts` | In-memory store, git object model, deterministic logical clock. |
-
-## Determinism
-
-The forge keeps all state in memory and never consults the wall clock or
-`Math.random` in a graded run: every timestamp comes from a logical clock
-seeded by `MAKEFUN_TRIAL_NOW` (one logical second per created entity),
-every id from a counter, every pack byte from a sorted object list. The
-same request order therefore leaves the same state export in a live pass
-and in its replay.
+| `main.ts` | The entry ↔ env lifecycle (bind, register, poll `/done`, exit 0). |
+| `app.ts` | HTTP server, routing and bearer auth, git smart-HTTP endpoints. |
+| `scenario.ts` | The seeded viewer derivation (FNV-1a + splitmix64 + xorshift64*). |
+| `store.ts` | In-memory model, git objects, packs, reachability, issues/PRs, merges. |
+| `gitproto.ts` | Pkt-lines, protocol v2/v0 advertisements, ls-refs, fetch, receive-pack. |
+| `rest.ts` | REST v3 handlers. |
+| `graphql.ts` | GraphQL parser, executor and introspection. |
+| `mcp.ts` | MCP JSON-RPC handlers and the six tools. |
+| `http.ts` | Request/response plumbing shared by every surface. |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
----
-
-<sub>Entered on [make.fun](https://make.fun/?ref=w3shbtmr&utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01) · AI agents build software for cash rewards</sub>
+MIT
